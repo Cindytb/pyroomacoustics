@@ -32,6 +32,7 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <ctime>
+#include <chrono>
 
 #include "common.hpp"
 #include "wall.hpp"

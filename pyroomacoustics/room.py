@@ -345,6 +345,7 @@ from .doa import GridCircle, GridSphere
 
 from . import libroom
 from .libroom import Wall, Wall2D
+import pickle
 
 
 def wall_factory(corners, absorption, scattering, name=""):
@@ -1490,8 +1491,251 @@ class Room(object):
 
         # Update the state
         self.simulator_state["ism_done"] = True
+        
+    ###
+    ###    BEGIN CINDY HACKING
+    ###
+    def scat_ray(self, transmitted, wall, prev_last_hit, hit_point, travel_dist):
+        distance_thres = self.rt_args["time_thres"] * self.room_engine.sound_speed
+        ret = True
+        for k, mic in enumerate(self.room_engine.microphones):
+            mic_pos = mic.get_loc()
+            if wall.side(mic_pos) != wall.side(prev_last_hit):
+                ret = False
+                continue
+            next_wall_index = -1
+            dont_care, next_wall_index = next_wall_hit(hit_point, mic_pos, True)
+            if next_wall_index == -1:
+                hit_point_to_mic = mic_pos - hit_point
+                hop_dist = np.linalg.norm(hit_point_to_mic)
+                travel_dist_at_mic = travel_dist + hop_dist
 
-    def ray_tracing(self):
+                m_sq = self.rt_args["receiver_radius"] ** 2
+                h_sq = hop_dist ** 2
+                p_hit_equal = 1 - np.sqrt(1 - m_sq / h_sq)
+                p_lambert = 2 * np.abs(wall.cosine_angle(hit_point_to_mic))
+                scat_trans = wall.scatter * transmitted * p_hit_equal * p_lambert
+
+                if (
+                    travel_dist_at_mic < distance_thres
+                    and scat_trans.maxCoeff() > self.room_engine.energy_thres
+                ):
+                    r_sq = travel_dist_at_mic ** 2
+                    p_hit = 1 - np.sqrt(1 - m_sq / np.max([m_sq, r_sq]))
+                    energy = scat_trans / (r_sq * p_hit)
+                    self.room_engine.microphones[k].log_histogram(
+                        travel_dist_at_mic, energy, hit_point
+                    )
+                else:
+                    ret = False
+            else:
+                ret = False
+
+    def next_wall_hit(self, start, end, scattered_ray):
+        next_wall_index = -1
+        min_dist = np.float32(self.room_engine.max_dist)
+        result = None
+        for i, w in enumerate(self.walls):
+            if scattered_ray and i in self.obstructing_walls:
+                continue
+
+            temp_hit = np.zeros(start.shape, dtype=np.float32)
+            intersection = w.intersection(start, end, temp_hit)
+
+            # p1 = w.corners[:,0]
+            # p2 = w.corners[:,1]
+            # # intersection = libroom.intersection_2d_segments(np.vstack(start), np.vstack(end), p1, p2, temp_hit)
+            # # print(w.corners[0][0])
+            # # print(w.corners[1][0])
+            # # print(w.corners[0][1])
+            # # print(w.corners[1][1])
+            intersects = intersection > -1
+            if intersects:
+                temp_dist = np.float32(np.linalg.norm(start - temp_hit))
+                # # print("temp dist: %.10f" % temp_dist)
+                # # print("intersection x: %.10f" % temp_hit[0])
+                # # print("intersection y: %.10f" % temp_hit[1])
+                if temp_dist < min_dist and temp_dist > 1e-5:
+                    min_dist = temp_dist
+                    result = temp_hit
+                    next_wall_index = i
+        return result, next_wall_index
+
+    def simul_ray(self, phi, theta, source_pos, energy_0):
+        # What we need to trace the ray
+        start = source_pos
+        # print("start x: %.10f" % start[0])
+        # print("start y: %.10f" % start[1])
+        # print("start z: %.10f" % start[2])
+
+        # print("phi: %.10f" % phi)
+        # print("theta: %.10f" % theta)
+        arr = np.array(
+            [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)]
+        )
+        if source_pos.size == 2:
+            end = start + np.float32(self.room_engine.max_dist) * np.array(
+                [np.cos(phi), np.sin(phi)], dtype=np.float32
+            )
+        else:
+            end = start + np.float32(self.room_engine.max_dist) * arr
+
+        # print("end x: %.10f" % end[0])
+        # print("end y: %.10f" % end[1])
+        # print("end z: %.10f" % end[2])
+        next_wall_index = 0
+        # The ray's characteristics
+        # print("n_bands:", self.octave_bands.n_bands)
+        transmitted = np.ones(self.octave_bands.n_bands, dtype=np.float32) * energy_0
+        energy = np.ones(self.octave_bands.n_bands, dtype=np.float32)
+        travel_dist = np.float32(0)
+
+        # To count the number of times the ray bounces on the walls
+        # For hybrid generation we add a ray to output only if specular_counter
+        # is higher than the ism order
+        specular_counter = 0
+
+        # Convert the energy threshold to transmission threshold
+        e_thres = energy_0 * np.float32(self.rt_args["energy_thres"])
+        distance_thres = self.rt_args["time_thres"] * self.c
+
+        # print("energy threshold: %.10f" % e_thres)
+        # print("distance threshold: %.10f" % distance_thres)
+        m_sq = self.rt_args["receiver_radius"] ** 2
+        # print("mic radius squared: %.10f" % m_sq)
+
+        while True:
+            # print("Transmitted[0]", transmitted[0])
+            # print()
+            # print("start x: %.10f" % start[0])
+            # print("start y: %.10f" % start[1])
+            # print("start z: %.10f" % start[2])
+            # print("end x: %.10f" % end[0])
+            # print("end y: %.10f" % end[1])
+            # print("end z: %.10f" % end[2])
+            hit_point, next_wall_index = self.next_wall_hit(start, end, False)
+
+            # print("next wall index", next_wall_index)
+
+            if next_wall_index == -1:
+                break
+            # print("hit point x: %.10f" % hit_point[0])
+            # print("hit point y: %.10f" % hit_point[1])
+            # print("hit point z: %.10f" % hit_point[2])
+            wall = self.walls[next_wall_index]
+            distance = 0
+            for k, mic in enumerate(self.room_engine.microphones):
+                seg = hit_point - start
+                seg_length = np.float32(np.linalg.norm(seg))
+                seg = np.float32(seg) / seg_length
+                to_mic = mic.loc - start
+                impact_distance = np.sum(to_mic * seg)
+                # print("impact_distance: %.10f" % impact_distance)
+                impacts = -1e-5 < impact_distance and impact_distance < seg_length
+                # If yes, we compute the ray's transmitted amplitude at the mic
+                # and we continue the ray
+                if (
+                    impacts
+                    and np.linalg.norm(to_mic - seg * impact_distance)
+                    < self.rt_args["receiver_radius"] + 1e-5
+                ):
+                    # The length of this last hop
+                    distance = np.float32(np.abs(impact_distance))
+                    # print("distance: %.10f" % distance)
+                    # updating travel_time and transmitted amplitude for this ray
+                    # We DON'T want to modify the variables transmitted amplitude and travel_dist
+                    # because the ray will continue its way
+                    travel_dist_at_mic = travel_dist + distance
+                    # print("travel distance at mic %.10f" % (travel_dist_at_mic / 1000.0))
+                    r_sq = travel_dist_at_mic ** 2
+                    # print("r_sq %.10f" % r_sq)
+                    p_hit = 1 - np.sqrt(1 - m_sq / np.max([m_sq, r_sq]))
+                    # print("p_hit: %.10f" % p_hit)
+                    # print("distance:", travel_dist_at_mic)
+                    # print("P:", hit_point)
+                    if r_sq == 0:
+                        # energy = transmitted / p_hit
+                        energy = transmitted
+                    else:
+                        # energy = transmitted / (r_sq * p_hit)
+                        energy = transmitted / r_sq
+                    # print("energy: %.10f" % energy[0])
+                    self.room_engine.microphones[k].python_visible_log_histogram(
+                        travel_dist_at_mic, energy, start
+                    )
+            # Update the characteristics
+            distance = np.float32(np.linalg.norm(start - hit_point))
+            travel_dist += distance
+            transmitted *= 1 - np.float32(wall.absorption)
+            # print(wall.absorption)
+            # print(wall.absorption)
+            # Let's shoot the scattered ray induced by the rebound on the wall
+            if np.max(wall.scatter) > 0.0:
+                # Shoot the scattered ray
+                self.scat_ray(transmitted, wall, start, hit_point, travel_dist)
+
+                # The overall ray's energy gets decreased by the total
+                # amount of scattered energy
+                transmitted *= 1.0 - wall.scatter
+                # # print(transmitted[0])
+
+            # print("Travel Distance: %.10f" % (travel_dist/ 1000.0))
+            # print("Max Energy: %.10f" % np.float32(np.max(transmitted)))
+            # print("Energy Threshold:", e_thres)
+            # Check if we reach the thresholds for this ray
+            if travel_dist > distance_thres or np.max(transmitted) < e_thres:
+                break
+
+            # set up for next iteration
+            specular_counter += 1
+            end = wall.normal_reflect(start, hit_point, self.room_engine.max_dist)
+            start = hit_point
+        return
+
+    def trace(self, n_rays, source_pos):
+        energy_0 = np.float32(2.0) / np.float32(n_rays)
+        pi = 3.14159265358979323846
+        if source_pos.size == 2:
+            # print("initial energy: %.10f" % energy_0)
+            offset = np.float32(2.0 * pi / n_rays)
+            # print("offset: %.10f" % offset)
+            for i in range(n_rays):
+                # print()
+                # print("ray", i)
+                self.simul_ray(
+                    np.float32(i * offset), 0, np.float32(source_pos), energy_0
+                )
+        else:
+            offset = np.float32(2.0 / n_rays)
+            # print("offset: %.10f" % offset)
+            increment = pi * (np.float32(3) - np.float32(np.sqrt(5.0)))  # phi increment
+            # print("increment: %.10f" % increment)
+
+            for i in range(n_rays):
+                # print()
+                # print("ray", i)
+                z = np.float32((i * offset - 1) + offset / 2.0)
+                rho = np.float32(np.sqrt(1.0 - z * z))
+
+                phi = np.float32(i * increment)
+
+                x = np.cos(phi) * rho
+                y = np.sin(phi) * rho
+
+                # print("phi: %.10f" % phi)
+                # print("rho: %.10f" % rho)
+                # print("z: %.10f" % z)
+                # print("x: %.10f" % x)
+                # print("y: %.10f" % y)
+
+                azimuth = np.float32(np.arctan2(y, x))
+                colatitude = np.float32(
+                    np.arctan2(np.float32(np.sqrt(x * x + y * y)), z)
+                )
+
+                self.simul_ray(azimuth, colatitude, source_pos, energy_0)
+
+    def bui_ray_tracing(self):
 
         if not self.simulator_state["rt_needed"]:
             return
@@ -1499,9 +1743,13 @@ class Room(object):
         # this will be a list of lists with
         # shape (n_mics, n_src, n_directions, n_bands, n_time_bins)
         self.rt_histograms = [[] for r in range(self.mic_array.M)]
-
+        retval = None
         for s, src in enumerate(self.sources):
-            self.room_engine.ray_tracing(self.rt_args["n_rays"], src.position)
+            # self.room_engine.ray_tracing(self.rt_args["n_rays"], src.position)
+            t = stopwatch.Timer()
+            self.trace(self.rt_args["n_rays"], src.position)
+            t.stop()
+            print(t.elapsed)
 
             for r in range(self.mic_array.M):
                 self.rt_histograms[r].append([])
@@ -1510,11 +1758,137 @@ class Room(object):
                     self.rt_histograms[r][s].append(h.get_hist())
             # reset all the receivers' histograms
             self.room_engine.reset_mics()
+            retval = self.rt_histograms[0][0][0][0]
 
         # update the state
         self.simulator_state["rt_done"] = True
+        return retval
+    def ratchet_ir(self):
+        if self.simulator_state["rt_needed"] and not self.simulator_state["rt_done"]:
+            self.ray_tracing()
 
-    def compute_rir(self):
+        self.rir = []
+
+        volume_room = self.get_volume()
+
+        for m, mic in enumerate(self.mic_array.R.T):
+            self.rir.append([])
+            for s, src in enumerate(self.sources):
+
+                """
+                Compute the room impulse response between the source
+                and the microphone whose position is given as an
+                argument.
+                """
+                # fractional delay length
+                fdl = constants.get("frac_delay_length")  # default is 81
+                fdl2 = fdl // 2  # default is 40
+
+                # default, just in case both ism and rt are disabled (should never happen)
+                N = fdl
+
+                t_max = 0.0
+
+                # get the maximum length from the histograms
+                nz_bins_loc = np.nonzero(self.rt_histograms[m][s][0].sum(axis=0))[0]
+                if len(nz_bins_loc) == 0:
+                    n_bins = 0
+                else:
+                    n_bins = nz_bins_loc[-1] + 1
+
+                t_max = np.maximum(t_max, n_bins * self.rt_args["hist_bin_size"])
+
+                # the number of samples needed
+                # round up to multiple of the histogram bin size
+                # add the lengths of the fractional delay filter
+                hbss = int(self.rt_args["hist_bin_size_samples"])
+                N = int(math.ceil(t_max * self.fs / hbss) * hbss)
+
+                # this is where we will compose the RIR
+                ir = np.zeros(N + fdl)
+                
+
+                # This is the distance travelled wrt time
+                distance_rir = np.arange(N) / self.fs * self.c
+                # print(distance_rir)
+
+                # this is the random sequence for the tail generation
+                # if len(seq) == 0:
+                seq = sequence_generation(volume_room, N / self.fs, self.c, self.fs)
+                seq = seq[:N]
+                pickle.dump(seq, open("room1_seq.p", "wb"))
+
+                # Do band-wise RIR construction
+                is_multi_band = self.is_multi_band
+                bws = self.octave_bands.get_bw() if is_multi_band else [self.fs / 2]
+                rir_bands = []
+
+                for b, bw in enumerate(bws):
+
+                    ir_loc = np.zeros_like(ir)
+
+                    if is_multi_band:
+                        seq_bp = self.octave_bands.analysis(seq, band=b)
+                    else:
+                        seq_bp = seq.copy()
+
+                    # interpolate the histogram and multiply the sequence
+                    seq_bp_rot = seq_bp.reshape((-1, hbss))
+                    new_n_bins = seq_bp_rot.shape[0]
+
+                    hist = self.rt_histograms[m][s][0][b, :new_n_bins]
+                    
+
+                    for n in range(new_n_bins):
+                        ir[n * hbss] = hist[n]
+                    # normalization = np.linalg.norm(seq_bp_rot, axis=1)
+                    # indices = normalization > 0.0
+                    # seq_bp_rot[indices, :] /= normalization[indices, None]
+                    # seq_bp_rot *= np.sqrt(hist[:, None])
+
+                    # # Normalize the band power
+                    # # The bands should normally sum up to fs / 2
+                    # seq_bp *= np.sqrt(bw / self.fs * 2.0)
+
+                    # ir_loc[fdl2 : fdl2 + N] += seq_bp
+
+                    # # keep for further processing
+                    # rir_bands.append(ir_loc)
+
+                # Sum up all the bands
+                # np.sum(rir_bands, axis=0, out=ir)
+
+                # self.rir[-1].append(ir)
+        return ir
+        # self.simulator_state["rir_done"] = True
+    ###
+    ###    END CINDY HACKING
+    ###
+    def ray_tracing(self):
+        if not self.simulator_state["rt_needed"]:
+            return
+
+        # this will be a list of lists with
+        # shape (n_mics, n_src, n_directions, n_bands, n_time_bins)
+        self.rt_histograms = [[] for r in range(self.mic_array.M)]
+        retval = None
+        for s, src in enumerate(self.sources):
+            self.room_engine.ray_tracing(self.rt_args["n_rays"], src.position)
+            # self.trace(self.rt_args["n_rays"], src.position)
+
+            for r in range(self.mic_array.M):
+                self.rt_histograms[r].append([])
+                for h in self.room_engine.microphones[r].histograms:
+                    # get a copy of the histogram
+                    self.rt_histograms[r][s].append(h.get_hist())
+            # reset all the receivers' histograms
+            self.room_engine.reset_mics()
+            retval = self.rt_histograms[0][0][0][0]
+        # update the state
+        self.simulator_state["rt_done"] = True
+        return retval
+
+    def compute_rir(self, seq=None):
         """
         Compute the room impulse response between every source and microphone.
         """
@@ -1539,8 +1913,8 @@ class Room(object):
                 argument.
                 """
                 # fractional delay length
-                fdl = constants.get("frac_delay_length")
-                fdl2 = fdl // 2
+                fdl = constants.get("frac_delay_length")  # default is 81
+                fdl2 = fdl // 2  # default is 40
 
                 # default, just in case both ism and rt are disabled (should never happen)
                 N = fdl
@@ -1578,10 +1952,13 @@ class Room(object):
 
                 # This is the distance travelled wrt time
                 distance_rir = np.arange(N) / self.fs * self.c
+                # print(distance_rir)
 
                 # this is the random sequence for the tail generation
+                # if len(seq) == 0:
                 seq = sequence_generation(volume_room, N / self.fs, self.c, self.fs)
                 seq = seq[:N]
+                pickle.dump(seq, open("room1_seq.p", "wb"))
 
                 # Do band-wise RIR construction
                 is_multi_band = self.is_multi_band

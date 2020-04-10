@@ -39,7 +39,7 @@
 
 namespace py = pybind11;
 
-float libroom_eps = 1e-4;  // epsilon is set to 0.1 millimeter (100 um)
+float libroom_eps = 1e-5;  // epsilon is set to 0.1 millimeter (100 um)
 
 
 PYBIND11_MODULE(libroom, m) {
@@ -236,6 +236,7 @@ PYBIND11_MODULE(libroom, m) {
   // The microphone class
   py::class_<Microphone<3>>(m, "Microphone")
     .def(py::init<const Vectorf<3> &, int, float, float>())
+    .def("python_visible_log_histogram", &Microphone<3>::python_visible_log_histogram)
     .def_readonly("loc", &Microphone<3>::loc)
     .def_readonly("hits", &Microphone<3>::hits)
     .def_readonly("histograms", &Microphone<3>::histograms)
@@ -243,6 +244,7 @@ PYBIND11_MODULE(libroom, m) {
 
   py::class_<Microphone<2>>(m, "Microphone2D")
     .def(py::init<const Vectorf<2> &, int, float, float>())
+    .def("python_visible_log_histogram", &Microphone<2>::python_visible_log_histogram)
     .def_readonly("loc", &Microphone<2>::loc)
     .def_readonly("hits", &Microphone<2>::hits)
     .def_readonly("histograms", &Microphone<2>::histograms)

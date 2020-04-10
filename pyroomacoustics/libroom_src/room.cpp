@@ -610,106 +610,104 @@ std::tuple < Vectorf<D>, int, float > Room<D>::next_wall_hit(
   int next_wall_index = -1;
   float hit_dist(max_dist);
 
-  if (is_shoebox)
+  // if (is_shoebox)
+  // {
+  // 	// There are no obstructing walls in shoebox rooms
+  // 	if (scattered_ray)
+  // 		return std::make_tuple(result, -1, 0.);
+
+  // 	// The direction vector
+  // 	Vectorf<D> dir = end - start;
+
+  // 	for (auto &d : shoebox_orders)
+  // 	{
+  // 		float abs_dir0 = std::abs(dir[d[0]]);
+  // 		if (abs_dir0 < libroom_eps)
+  // 			continue;
+
+  // 		// distance to plane
+  // 		float distance = 0.;
+
+  // 		// this wil tell us if the front or back plane is hit
+  // 		int ind_inc = 0;
+
+  // 		if (dir[d[0]] < 0)
+  // 		{
+  // 			result[d[0]] = 0.;
+  // 			distance = start[d[0]];
+  // 			ind_inc = 0;
+  // 		}
+  // 		else
+  // 		{
+  // 			result[d[0]] = shoebox_size[d[0]];
+  // 			distance = shoebox_size[d[0]] - start[d[0]];
+  // 			ind_inc = 1;
+  // 		}
+
+  // 		if (distance < libroom_eps)
+  // 			continue;
+
+  // 		float ratio = distance / abs_dir0;
+
+  // 		// Now compute the intersection point and verify if intersection happens
+  // 		for (size_t i = 1; i < D; ++i)
+  // 		{
+  // 			result[d[i]] = start[d[i]] + ratio * dir[d[i]];
+  // 			// when there is no intersection, we jump to the next plane
+  // 			if (result[d[i]] <= -libroom_eps || shoebox_size[d[i]] + libroom_eps <= result[d[i]])
+  // 				goto next_plane;
+  // 		}
+
+  // 		// if we get here, there is intersection with this wall
+  // 		next_wall_index = 2 * d[0] + ind_inc;
+
+  // 		hit_dist = (result - start).norm();
+
+  // 		break;
+
+  // 	next_plane:
+  // 		(void)0; // no op
+  // 	}
+  // }
+  // else
+  // {
+  // For case 1) in non-convex rooms, the segment might intersect several
+  // walls. In this case, we are only interested on the closest wall to
+  // 'start'. That's why we need a min_dist variable
+  // Upperbound on the min distance that we could find
+
+  // For a scattered ray, we only check the obstructing walls
+  size_t n_walls = scattered_ray ? obstructing_walls.size() : walls.size();
+
+  for (size_t i(0); i < n_walls; ++i)
   {
-    // There are no obstructing walls in shoebox rooms
-    if (scattered_ray)
-      return std::make_tuple(result, -1, 0.);
+    Wall<D> &w = scattered_ray ? walls[obstructing_walls[i]] : walls[i];
 
-    // The direction vector
-    Vectorf<D> dir = end - start;
+    // To store the result of this iteration
+    Vectorf<D> temp_hit;
 
-    for (auto& d : shoebox_orders)
+    // As a side effect, temp_hit gets a value (VectorXf) here
+    int ret = w.intersection(start, end, temp_hit);
+
+    if (ret > -1)
     {
-      float abs_dir0 = std::abs(dir[d[0]]);
-      if (abs_dir0 < libroom_eps)
-        continue;
+      float temp_dist = (temp_hit - start).norm();
 
-      // distance to plane
-      float distance = 0.;
-
-      // this wil tell us if the front or back plane is hit
-      int ind_inc = 0;
-
-      if (dir[d[0]] < 0)
+      // Compare to min dist to see if this wall is the closest to 'start'
+      // Compare to libroom_eps to be sure that this wall w is not the wall
+      //   where 'start' is located ('intersects' could be true because of
+      //   rounding errors)
+      if (temp_dist > libroom_eps && temp_dist < hit_dist)
       {
-        result[d[0]] = 0.;
-        distance = start[d[0]];
-        ind_inc = 0;
+        hit_dist = temp_dist;
+        result = temp_hit;
+        next_wall_index = i;
       }
-      else
-      {
-        result[d[0]] = shoebox_size[d[0]];
-        distance = shoebox_size[d[0]] - start[d[0]];
-        ind_inc = 1;
-      }
-
-      if (distance < libroom_eps)
-        continue;
-
-      float ratio = distance / abs_dir0;
-
-      // Now compute the intersection point and verify if intersection happens
-      for (size_t i = 1 ; i < D ; ++i)
-      {
-        result[d[i]] = start[d[i]] + ratio * dir[d[i]];
-        // when there is no intersection, we jump to the next plane
-        if (result[d[i]] <= -libroom_eps || shoebox_size[d[i]] + libroom_eps <= result[d[i]])
-          goto next_plane;
-      }
-
-      // if we get here, there is intersection with this wall
-      next_wall_index = 2 * d[0] + ind_inc;
-
-      hit_dist = (result - start).norm();
-
-      break;
-
-next_plane:
-      (void)0;  // no op
     }
   }
-  else
-  {
-    // For case 1) in non-convex rooms, the segment might intersect several
-    // walls. In this case, we are only interested on the closest wall to
-    // 'start'. That's why we need a min_dist variable
-    // Upperbound on the min distance that we could find
-
-    // For a scattered ray, we only check the obstructing walls
-    size_t n_walls = scattered_ray ? obstructing_walls.size() : walls.size();
-
-    for (size_t i(0) ; i < n_walls ; ++i)
-    {
-      Wall<D> & w = scattered_ray ? walls[obstructing_walls[i]] : walls[i];
-
-      // To store the result of this iteration
-      Vectorf<D> temp_hit;
-
-      // As a side effect, temp_hit gets a value (VectorXf) here
-      int ret = w.intersection(start, end, temp_hit);
-
-      if (ret > -1)
-      {
-        float temp_dist = (temp_hit - start).norm();
-
-        // Compare to min dist to see if this wall is the closest to 'start'
-        // Compare to libroom_eps to be sure that this wall w is not the wall
-        //   where 'start' is located ('intersects' could be true because of
-        //   rounding errors)
-        if (temp_dist > libroom_eps && temp_dist < hit_dist)
-        {
-          hit_dist = temp_dist;
-          result = temp_hit;
-          next_wall_index = i;
-        }
-      }
-    }
-
-  }
+  // }
 
   return std::make_tuple(result, next_wall_index, hit_dist);
-
 }
 
 
@@ -828,6 +826,12 @@ void Room<D>::simul_ray(
   // What we need to trace the ray
   // the origin of the ray
   Vectorf<D> start = source_pos;
+  // std::cout << "start x: " << start[0] << std::endl;
+  // std::cout << "start y: " << start[1] << std::endl;
+  // std::cout << "start z: " << start[2] << std::endl;
+
+  // std::cout << "phi: " << phi << std::endl;
+  // std::cout << "theta: " << theta << std::endl;
   // the direction of the ray (unit vector)
   Vectorf<D> dir;
   if(D == 2)
@@ -835,6 +839,9 @@ void Room<D>::simul_ray(
   else if (D == 3)
     dir.head(3) = Eigen::Vector3f(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
 
+  // std::cout << "dir x: " << dir[0] << std::endl;
+  // std::cout << "dir y: " << dir[1] << std::endl;
+  // std::cout << "dir z: " << dir[2] << std::endl;
   // The following initializations are arbitrary and does not count since we set
   // the boolean to false
   int next_wall_index(0);
@@ -852,7 +859,7 @@ void Room<D>::simul_ray(
   // Convert the energy threshold to transmission threshold
   float e_thres = energy_0 * energy_thres;
   float distance_thres = time_thres * sound_speed;
-
+  // std::cout << "distance threshold: " << distance_thres << std::endl;
   //---------------------------------------------
 
 
@@ -900,8 +907,15 @@ void Room<D>::simul_ray(
 
           double r_sq = double(travel_dist_at_mic) * travel_dist_at_mic;
           auto p_hit = (1 - sqrt(1 - mic_radius_sq / std::max(mic_radius_sq, r_sq)));
-          energy = transmitted / (r_sq * p_hit);
+          // energy = transmitted / (r_sq * p_hit);
+          energy = transmitted / r_sq;
           // energy = transmitted / (travel_dist_at_mic - sqrtf(fmaxf(0.f, travel_dist_at_mic * travel_dist_at_mic - mic_radius_sq)));
+          // std::cout << "energy: " << energy << std:: endl;
+          // printf("travel_dist_at_mic: %.10f\n", travel_dist_at_mic);
+          // printf("transmitted[0]: %.10f\n", transmitted[0]);
+          // printf("energy[0]: %.10f\n", energy[0]);
+          // printf("p_hit: %.10f\n\n", p_hit);
+          // std::cout << "transmitted[0] " << transmitted << std::endl;
           microphones[k].log_histogram(travel_dist_at_mic, energy, start);
         }
       }
@@ -1034,11 +1048,15 @@ void Room<D>::ray_tracing(
    source_pos: (array size 2 or 3) represents the position of the sound source
    */
 
+  auto start = std::chrono::high_resolution_clock::now();
 
   // ------------------ INIT --------------------
   // initial energy of one ray
+  // std::cout << std::fixed;
+  // std::cout.precision(10);
   float energy_0 = 2.f / n_rays;
-
+  // std::cout << "TOTAL RAYS: " << n_rays << std::endl;
+  // // std::cout << "initial energy: " << energy_0 << std::endl;
   // ------------------ RAY TRACING --------------------
   if (D == 3)
   {
@@ -1054,7 +1072,11 @@ void Room<D>::ray_tracing(
 
       auto x = cos(phi) * rho;
       auto y = sin(phi) * rho;
-
+      // std::cout<< "phi: " << phi << std::endl;
+      // std::cout<< "rho: " << rho << std::endl;
+      // std::cout<< "z: " << z << std::endl;
+      // std::cout<< "x: " << x << std::endl;
+      // std::cout<< "y: " << y << std::endl;
       auto azimuth = atan2(y, x);
       auto colatitude = atan2(sqrt(x * x + y * y), z);
 
@@ -1064,11 +1086,20 @@ void Room<D>::ray_tracing(
   else if (D == 2)
   {
     float offset = 2. * pi / n_rays;
+    // // std::cout << "offset: " << offset << std::endl;
     for (size_t i(0) ; i < n_rays ; ++i)
+    {
+      // // std::cout << std::endl;
+      std::cout << "ray " << i << std::endl;
       simul_ray(i * offset, 0.f, source_pos, energy_0);
+    }
   }
-}
+  auto stop = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
 
+  std::cout << "Time taken by function: "
+            << duration.count() << " microseconds" << std::endl;
+}
 
 template<size_t D>
 bool Room<D>::contains(const Vectorf<D> point)

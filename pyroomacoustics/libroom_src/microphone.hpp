@@ -97,6 +97,10 @@ class Microphone
       hits.push_back(copy_hit);
     }
 
+    void python_visible_log_histogram(float distance, const Eigen::ArrayXf &energy, const Vectorf<D> &origin)
+    {
+      log_histogram(distance, energy, origin);
+    }
     void log_histogram(float distance, const Eigen::ArrayXf &energy, const Vectorf<D> &origin)
     {
       // first find the bin index
